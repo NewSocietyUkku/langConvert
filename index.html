@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spanish → itti Converter v13</title>
+<style>
+body { font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#f4f7f6;
+       color:#333; max-width:640px; margin:40px auto; padding:20px; }
+.container { background:#fff; padding:30px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,.1); }
+h1 { color:#2c3e50; text-align:center; }
+p.sub { text-align:center;font-size:14px;color:#777; }
+label { font-weight:bold; display:block; margin-top:15px; margin-bottom:5px; }
+select, input[type=text] { width:100%; padding:10px; border:1px solid #ccc; border-radius:6px;
+                font-size:16px; box-sizing:border-box; }
+.toggle-row { display:flex; align-items:center; gap:8px; margin-top:12px;
+              font-weight:normal; font-size:14px; color:#555; }
+.toggle-row input { width:auto; }
+.toggle-row label { margin:0; font-weight:normal; font-size:14px; }
+button { width:100%; background:#3498db; color:#fff; padding:12px; margin-top:25px;
+         border:none; border-radius:6px; font-size:16px; font-weight:bold; cursor:pointer;
+         transition:background .3s; }
+button:hover { background:#2980b9; }
+.output-box { margin-top:25px; padding:20px; background:#e8f4fd; border-left:5px solid #3498db;
+              border-radius:4px; font-size:18px; word-wrap:break-word; }
+.output-box.long { background:#fdf3e7; border-left-color:#e67e22; }
+.debug-info { font-size:12px; color:#7f8c8d; margin-top:10px; line-height:1.6; }
+.debug-info code { background:#eef3f7; padding:1px 5px; border-radius:3px; }
+.debug-info .stage { color:#e67e22; font-weight:bold; }
+.badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px;
+         font-weight:bold; margin-left:6px; vertical-align:middle; }
+.badge.short { background:#3498db; color:#fff; }
+.badge.long  { background:#e67e22; color:#fff; }
+.dropped { text-decoration:line-through; color:#c0392b; opacity:.6; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>itti Translator</h1>
+<p class="sub">LONG: remove r/rr/l before conversion · keep s, ll, ch · SHORT: unchanged</p>
+
+<label for="spanishInput">Input Word or Phrase:</label>
+<input type="text" id="spanishInput" placeholder="necesidad, skat, tratratatataltaltraltral" autocomplete="off">
+
+<div class="toggle-row">
+  <input type="checkbox" id="seseToggle" checked>
+  <label for="seseToggle">Seseo (<code>c+e/i → s</code> instead of <code>z</code>)</label>
+</div>
+
+<label for="definingSound">Defining Sound (category):</label>
+<select id="definingSound">
+  <optgroup label="General & States">
+    <option value="gif">gif (Spatial Relationship)</option>
+    <option value="gin">gin (State / Government)</option>
+    <option value="gip">gip (Physical Land / Earth)</option>
+    <option value="gik">gik (Land controlled by State)</option>
+  </optgroup>
+  <optgroup label="Nature, Objects & Concepts">
+    <option value="tif">tif (Animal / Body part / Derivative)</option>
+    <option value="tin">tin (measurements)</option>
+    <option value="tip" selected>tip (all others)</option>
+    <option value="tik">tik (Emotion)</option>
+  </optgroup>
+  <optgroup label="Names & Foreign Words">
+    <option value="bi">bi (itti name — converted, no ender)</option>
+    <option value="bin">bin (Foreign name — kept as-is, ends with bif)</option>
+    <option value="bip">bip (Foreign word/sentence — kept as-is, ends with bif)</option>
+    <option value="bik">bik (Onomatopoeia — converted)</option>
+  </optgroup>
+</select>
+
+<button onclick="translateToitti()">Translate to itti</button>
+<div id="outputContainer" style="display:none;">
+  <div class="output-box" id="output"></div>
+  <div class="debug-info" id="debug"></div>
+</div>
+</div>
+
+<script>
+// ─── Position tables ───
+const TEMPLATES = {
+  a:['f','f'], b:['n','f'], c:['p','f'], d:['k','f'],
+  e:['f','n'], f:['n','n'], g:['p','n'], h:['k','n'],
+  i:['f','p'], j:['n','p'], k:['p','p'], l:['k','p'],
+  m:['f','k'], n:['n','k'], o:['p','k'], p:['k','k'],
+  q:['f',''],  r:['n',''],  s:['p',''],  t:['k',''],
+  u:['','f'],  v:['','n'],  w:['','p'],  x:['','k']
+};
+const VOWELS = 'aeiou';
+
+const LONG_ONSET = {
+  a:'b',  b:'d',  c:'k',  d:'n',   e:'f',   f:'t',   g:'m',
+  h:'sb', i:'sd', j:'sk', k:'sn',  l:'sf',  m:'st',  n:'sm',
+  o:'shb',p:'shd',q:'shk',r:'shn', s:'shf', t:'sht', u:'shm',
+  v:'s',  w:'sh', x:'z'
+};
+const LONG_CODA = {
+  a:{on:'', co:'', s:false}, b:{on:'', co:'r', s:false}, c:{on:'', co:'l', s:false},
+  d:{on:'w', co:'', s:false}, e:{on:'w', co:'r', s:false}, f:{on:'w', co:'l', s:false},
+  g:{on:'l', co:'', s:false}, h:{on:'l', co:'r', s:false}, i:{on:'l', co:'l', s:false},
+  j:{on:'r', co:'', s:false}, k:{on:'r', co:'r', s:false}, l:{on:'r', co:'l', s:false},
+  m:{on:'', co:'', s:true},   n:{on:'', co:'r', s:true},   o:{on:'', co:'l', s:true},
+  p:{on:'w', co:'', s:true},  q:{on:'w', co:'r', s:true},  r:{on:'w', co:'l', s:true},
+  s:{on:'l', co:'', s:true},  t:{on:'l', co:'r', s:true},  u:{on:'l', co:'l', s:true},
+  v:{on:'r', co:'', s:true},  w:{on:'r', co:'r', s:true},  x:{on:'r', co:'l', s:true}
+};
+const VOWEL_BRIDGE = { a:'b', e:'d', i:'k', o:'n', u:'f' };
+
+// ─── Shared preprocessing (identical for both methods) ───
+function spanishToSound(raw, sese) {
+  let word = raw.toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
+  word = word.replace(/ch/g, '\u00A7CH\u00A7');           // protect ch
+  word = word.replace(/gü([ei])/g, 'gw$1');                // ü pronounced
+  word = word.replace(/qü([ei])/g, 'kw$1');
+  word = word.replace(/qu([ei])/g, 'k$1');                 // silent u
+  word = word.replace(/gu([ei])/g, 'G$1');                 // silent u (protect g)
+  word = word.replace(/c([ei])/g, sese ? 's$1' : 'z$1');   // SESE
+  word = word.replace(/c([aou])/g, 'k$1');
+  word = word.replace(/c$/g, 'k');
+  word = word.replace(/c(?=[^aeiou])/g, 'k');
+  word = word.replace(/g([ei])/g, 'j$1');                  // jota
+  word = word.replace(/G/g, 'g');
+  word = word.replace(/[áéíóú]/g, c => ({á:'a',é:'e',í:'i',ó:'o',ú:'u'}[c]));
+  word = word.replace(/h/g, '');                           // hidden h
+  word = word.replace(/\u00A7CH\u00A7/g, 'ch');
+  return word;
+}
+
+// ─── Tokenizer ───
+// token types: 'vowel' | 'cons' | 'll' | 'Rsound' | 'liquid'
+//   'll'     → digraph, kept in BOTH methods (mapped via 'e' template in short)
+//   'Rsound' → rr or word-initial r; removed in long
+//   'liquid' → r or l; removed in long
+function tokenize(word) {
+  const t = [];
+  let i = 0;
+  while (i < word.length) {
+    const c  = word[i];
+    const c2 = word.substr(i, 2);
+    if (c2 === 'ch') { t.push({ type:'cons',   letter:'a', orig:'ch' }); i+=2; continue; }
+    if (c2 === 'll') { t.push({ type:'cons',   letter:'e', orig:'ll' }); i+=2; continue; } // see note
+    if (c2 === 'rr') { t.push({ type:'Rsound', orig:'rr' });             i+=2; continue; }
+    if (c === 'ñ')   { t.push({ type:'cons',   letter:'h', orig:'ñ'  }); i++;  continue; }
+    if (c === 'z')   { t.push({ type:'cons',   letter:'r', orig:'z'  }); i++;  continue; }
+    if (c === 'y')   { t.push({ type:'cons',   letter:'l', orig:'y'  }); i++;  continue; }
+    if (c === 'r' && i === 0) { t.push({ type:'Rsound', orig:'r' });     i++;  continue; }
+    if (c === 'r')   { t.push({ type:'liquid', letter:'r' });            i++;  continue; }
+    if (c === 'l')   { t.push({ type:'liquid', letter:'l' });            i++;  continue; }
+    if (VOWELS.includes(c)) { t.push({ type:'vowel', letter:c });        i++;  continue; }
+    if (TEMPLATES[c]) { t.push({ type:'cons', letter:c });               i++;  continue; }
+    i++;
+  }
+  return t;
+}
+
+// ─── Syllabifier (1 consonant between vowels → next onset; 2+ → coda split) ───
+function syllabify(tokens) {
+  const vIdx = [];
+  tokens.forEach((tok, i) => { if (tok.type === 'vowel') vIdx.push(i); });
+  if (!vIdx.length) return [];
+  const out = [];
+  for (let vi = 0; vi < vIdx.length; vi++) {
+    const v = vIdx[vi];
+    let onset, coda;
+    if (vi === 0) onset = tokens.slice(0, v);
+    else {
+      const between = tokens.slice(vIdx[vi-1] + 1, v);
+      onset = between.length === 1 ? between
+            : between.length >= 2 ? between.slice(-1) : [];
+    }
+    if (vi === vIdx.length - 1) coda = tokens.slice(v + 1);
+    else {
+      const between = tokens.slice(v + 1, vIdx[vi+1]);
+      coda = between.length >= 2 ? between.slice(0, -1) : [];
+    }
+    out.push({ onset, vowel: tokens[v].letter, coda });
+  }
+  return out;
+}
+
+// Split extra coda consonants into their own syllable (keeps liquids attached)
+function splitCoda(syl) {
+  const result = [{ onset: syl.onset.slice(), vowel: syl.vowel, coda: [] }];
+  if (syl.onset.length === 0) {
+    result[0].coda = syl.coda.slice();
+    return result;
+  }
+  for (const tok of syl.coda) {
+    if (tok.type === 'liquid' || tok.type === 'Rsound') result[0].coda.push(tok);
+    else result.push({ onset: [], vowel: syl.vowel, coda: [tok] });
+  }
+  return result;
+}
+
+// s + consonant is not a legal Spanish onset (es-pa-ña) → split the s off
+function splitSOnset(syl) {
+  if (syl.onset.length >= 2 &&
+      syl.onset[0].type === 'cons' &&
+      syl.onset[0].letter === 's') {
+    return [
+      { onset: [syl.onset[0]], vowel: syl.vowel, coda: [] },
+      { onset: syl.onset.slice(1), vowel: syl.vowel, coda: syl.coda }
+    ];
+  }
+  return [syl];
+}
+
+function splitClusters(syl) {
+  const out = [];
+  for (const c of splitCoda(syl)) out.push(...splitSOnset(c));
+  return out;
+}
+
+// ─── SHORT method: one syllable ───
+function contribution(tok) {
+  if (tok.type === 'liquid') return tok.letter;
+  if (tok.type === 'Rsound') return 'w';
+  if (tok.type === 'cons')   return TEMPLATES[tok.letter][0];
+  return '';
+}
+
+function convertShort(syl) {
+  const mOnset = syl.onset.findIndex(t => t.type === 'cons');
+  const mCoda  = syl.coda.findIndex(t => t.type === 'cons');
+  const main   = mOnset >= 0 ? syl.onset[mOnset]
+               : mCoda  >= 0 ? syl.coda[mCoda]
+               : null;
+  let out = '';
+  for (const t of syl.onset) {
+    out += (t === main) ? TEMPLATES[t.letter][0] : contribution(t);
+  }
+  if (main && mOnset < 0) out += TEMPLATES[main.letter][0];
+  out += syl.vowel;
+  for (const t of syl.coda) {
+    if (t === main) continue;
+    if (t.type === 'liquid' || t.type === 'Rsound') out += contribution(t);
+  }
+  if (main) out += TEMPLATES[main.letter][1];
+  return out;
+}
+
+// ─── LONG method ───
+// Step 1: remove every liquid/Rsound token (r, rr, l). Keep s, ll, ch, etc.
+function filterLiquids(tokens) {
+  return tokens.filter(tk => tk.type !== 'liquid' && tk.type !== 'Rsound');
+}
+
+// Step 2: pair-compress two syllables using the long tables
+function getMainConsonant(syl) {
+  const mOnset = syl.onset.find(t => t.type === 'cons');
+  if (mOnset) return mOnset.letter;
+  const mCoda = syl.coda.find(t => t.type === 'cons');
+  if (mCoda) return mCoda.letter;
+  return null;
+}
+
+function compressPair(s1, s2) {
+  const c1 = getMainConsonant(s1);
+  const c2 = getMainConsonant(s2);
+  const v1 = s1.vowel;
+  const v2 = s2.vowel;
+  const bridge = VOWEL_BRIDGE[v2] || '';
+  let out = '';
+  if (c1) out += LONG_ONSET[c1] || '';
+  if (c2 && LONG_CODA[c2]) out += LONG_CODA[c2].on;
+  out += v1;
+  if (c2 && LONG_CODA[c2]) out += LONG_CODA[c2].co;
+  out += bridge;
+  if (c2 && LONG_CODA[c2] && LONG_CODA[c2].s) out += 's';
+  return out;
+}
+
+function convertLongWord(sound) {
+  // (a) tokenize → (b) remove liquids → (c) syllabify → (d) split clusters
+  const filteredTokens = filterLiquids(tokenize(sound));
+  const filteredSound  = filteredTokens.map(t => t.orig || t.letter).join('');
+  const syls = syllabify(filteredTokens);
+  let split = [];
+  for (const s of syls) split.push(...splitClusters(s));
+
+  const preDrop = split.slice();
+  let dropped = null;
+  if (split.length % 2 !== 0) dropped = split.pop();
+
+  const content = [], pairs = [];
+  for (let i = 0; i < split.length; i += 2) {
+    if (split[i+1]) {
+      content.push(compressPair(split[i], split[i+1]));
+      pairs.push([split[i], split[i+1]]);
+    }
+  }
+  return { content, pairs, preDrop, dropped, filteredSound, filteredTokens };
+}
+
+// ─── Output helpers ───
+function formatOutput(all) {
+  if      (all.length >= 5)  return `${all[0]}-${all[1]}: ${all[2]}--${all[3]}:: ${all.slice(4).join('-')}`;
+  else if (all.length === 4) return `${all[0]}-${all[1]}: ${all[2]}--${all[3]}`;
+  else if (all.length === 3) return `${all[0]}-${all[1]}: ${all[2]}`;
+  else if (all.length === 2) return `${all[0]}-${all[1]}`;
+  else                       return all[0] || '';
+}
+
+function addFillerIfNeeded(content) {
+  let lastV = 'a';
+  outer: for (let i = content.length - 1; i >= 0; i--) {
+    for (let j = content[i].length - 1; j >= 0; j--) {
+      if (VOWELS.includes(content[i][j])) { lastV = content[i][j]; break outer; }
+    }
+  }
+  if ((1 + content.length) % 2 !== 0) {
+    const diff = VOWELS.split('').find(v => v !== lastV) || 'a';
+    content.push('y' + diff);
+  }
+  return content;
+}
+
+function sylStr(s) {
+  const o = s.onset.map(t => t.orig || t.letter).join('') || '∅';
+  return o + s.vowel + s.coda.map(t => t.orig || t.letter).join('');
+}
+
+// ─── Main ───
+function translateToitti() {
+  const raw    = document.getElementById('spanishInput').value.trim();
+  const prefix = document.getElementById('definingSound').value;
+  const sese   = document.getElementById('seseToggle').checked;
+  const outDiv = document.getElementById('output');
+  const dbgDiv = document.getElementById('debug');
+  const cont   = document.getElementById('outputContainer');
+
+  if (!raw) { alert("Please enter a word or phrase."); return; }
+  cont.style.display = 'block';
+  outDiv.classList.remove('long');
+
+  const esc = s => String(s).replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const seseLabel = sese ? 'seseo (c+e/i → s)' : 'distinción (c+e/i → z)';
+
+  // Unconverted foreign names / words
+  if (prefix === 'bin' || prefix === 'bip') {
+    const out = `${prefix} ${raw} bif`;
+    outDiv.innerHTML = `<strong>Result:</strong> ${esc(out)}`;
+    dbgDiv.innerHTML =
+        `<strong>Mode:</strong> unconverted (input preserved exactly)<br>` +
+        `<strong>Starter:</strong> <code>${prefix}</code> · <strong>Ender:</strong> <code>bif</code><br>` +
+        `<strong>Input:</strong> ${esc(raw)}`;
+    return;
+  }
+
+  // Shared preprocessing
+  const sound = spanishToSound(raw, sese);
+
+  // Short baseline (used to decide long-vs-short)
+  const shortSyls = (() => {
+    const t = tokenize(sound);
+    const s = syllabify(t);
+    const out = [];
+    for (const x of s) out.push(...splitClusters(x));
+    return out;
+  })();
+  const shortContent = shortSyls.map(convertShort);
+  const shortCount   = shortContent.length;
+
+  let usedLong = false;
+  let longInfo = null;
+  let content  = shortContent;
+
+  if (shortCount > 4 && !prefix.startsWith('b')) {
+    const result = convertLongWord(sound);
+    if (result.content.length > 0) {
+      usedLong = true;
+      longInfo = { ...result, shortContent };
+      content  = result.content;
+      outDiv.classList.add('long');
+    }
+  }
+
+  content = addFillerIfNeeded(content);
+  const all = [prefix, ...content];
+  const out = formatOutput(all);
+  const badge = usedLong
+    ? `<span class="badge long">LONG</span>`
+    : `<span class="badge short">SHORT</span>`;
+  outDiv.innerHTML = `<strong>Result:</strong> ${esc(out)} ${badge}`;
+
+  // Debug
+  let dbg = '';
+  if (usedLong) {
+    const pairLines = longInfo.pairs.map(([a,b]) =>
+      `<code>${esc(sylStr(a))}+${esc(sylStr(b))}</code> → <code>${esc(compressPair(a,b))}</code>`
+    ).join('<br>');
+    const droppedLine = longInfo.dropped
+      ? `<br><span class="stage">Odd rule:</span> dropped ` +
+        `<span class="dropped"><code>${esc(sylStr(longInfo.dropped))}</code></span>`
+      : '';
+    const allSylls = longInfo.preDrop.map(sylStr);
+
+    dbg =
+      `<strong>Mode: LONG</strong> (remove r/rr/l; keep s, ll, ch)<br>` +
+      `<strong>Original:</strong> ${esc(raw)}<br>` +
+      `<span class="stage">After sound rules</span> (${esc(seseLabel)}): <code>${esc(sound)}</code><br>` +
+      `<span class="stage">After removing r, rr, l:</span> <code>${esc(longInfo.filteredSound)}</code><br>` +
+      `<span class="stage">Syllables (before odd-drop):</span> <code>${esc(allSylls.join(' · '))}</code>` +
+      droppedLine +
+      `<br><span class="stage">Pair compression:</span><br>${pairLines}<br>` +
+      `<em style="color:#aaa;">Short method would have had ${shortCount} syllables: ` +
+      `<code>${esc(shortContent.join('-'))}</code></em>`;
+  } else {
+    const syllableLines = shortSyls.map((s,i) =>
+      `<code>${esc(sylStr(s))}</code> → <code>${esc(shortContent[i]||'')}</code>`
+    ).join('<br>');
+    dbg =
+      `<strong>Mode: SHORT</strong> (keeps l, r, rr, ll, s)<br>` +
+      `<strong>Original:</strong> ${esc(raw)}<br>` +
+      `<span class="stage">Sound-normalized</span> (${esc(seseLabel)}): <code>${esc(sound)}</code><br>` +
+      `<span class="stage">Syllables:</span><br>${syllableLines}`;
+  }
+  dbgDiv.innerHTML = dbg;
+}
+</script>
+</body>
+</html>
